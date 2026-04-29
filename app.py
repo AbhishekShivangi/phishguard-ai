@@ -17,12 +17,11 @@ st.title("🛡️ PhishGuard AI Pro (Real Dataset Version)")
 
 # ---------------- LOAD DATASET ----------------
 @st.cache_data
-def load_dataset():
-    df = kagglehub.load_dataset(
-        KaggleDatasetAdapter.PANDAS,
-        "taruntiwarihp/phishing-site-urls",
-        ""
-    )
+df = kagglehub.load_dataset(
+    KaggleDatasetAdapter.PANDAS,
+    "taruntiwarihp/phishing-site-urls",
+    "phishing_site_urls.csv"
+)
     df = df.rename(columns={"url": "url", "label": "label"})
     df["label"] = df["label"].map({"bad":1, "good":0})
     return df
