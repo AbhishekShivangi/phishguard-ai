@@ -1,9 +1,5 @@
-flask
-flask-cors
 streamlit
-scikit-learn
 pandas
-numpy
+scikit-learn
 requests
-python-whois
-fpdf
+kagglehub[pandas-datasets]
