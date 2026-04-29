@@ -3,70 +3,97 @@ import pandas as pd
 import requests
 import socket
 import time
-import re
-import kagglehub
-from kagglehub import KaggleDatasetAdapter
+import zipfile
+import os
+from io import BytesIO
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
-st.title("🛡️ PhishGuard AI Pro (Real Dataset Version)")
+# ---------------- CONFIG ----------------
+DATA_URL = "archive.zip"  # 🔥 Replace this
+CSV_NAME = "phishing_site_urls.csv"
 
-# ---------------- LOAD DATASET ----------------
+# ---------------- PAGE ----------------
+st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
+st.title("🛡️ PhishGuard AI Pro")
+st.markdown("Real-Time Phishing Detection System")
+
+# ---------------- LOAD DATA ----------------
 @st.cache_data
-df = kagglehub.load_dataset(
-    KaggleDatasetAdapter.PANDAS,
-    "taruntiwarihp/phishing-site-urls",
-    "phishing_site_urls.csv"
-)
-    df = df.rename(columns={"url": "url", "label": "label"})
+def load_dataset():
+    if not os.path.exists(CSV_NAME):
+        st.info("Downloading dataset...")
+
+        r = requests.get(DATA_URL)
+        z = zipfile.ZipFile(BytesIO(r.content))
+        z.extractall()
+
+        st.success("Dataset ready!")
+
+    df = pd.read_csv(CSV_NAME)
+
+    # Fix columns
+    if len(df.columns) != 2:
+        df = df.iloc[:, :2]
+
+    df.columns = ["url", "label"]
     df["label"] = df["label"].map({"bad":1, "good":0})
+
     return df
 
 df = load_dataset()
 
-st.success(f"Dataset Loaded: {len(df)} URLs")
-
-# ---------------- TRAIN MODELS ----------------
+# ---------------- TRAIN URL MODEL ----------------
 @st.cache_resource
-def train_models(df):
-    # URL MODEL
+def train_url_model(df):
     def extract(url):
-        return [len(url), sum(k in url for k in ["login","bank","verify","secure"])]
+        return [
+            len(url),
+            url.count("."),
+            url.count("-"),
+            sum(k in url for k in ["login","bank","verify","secure","account"])
+        ]
 
     X = [extract(u) for u in df["url"][:5000]]
     y = df["label"][:5000]
 
-    url_model = RandomForestClassifier(n_estimators=100)
-    url_model.fit(X, y)
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X, y)
 
-    # SMS MODEL
+    return model
+
+url_model = train_url_model(df)
+
+# ---------------- SMS MODEL ----------------
+@st.cache_resource
+def train_sms_model():
     sms_data = [
         ("Win money now click here",1),
         ("Your OTP is 1234",0),
         ("Verify your bank account immediately",1),
         ("Free prize claim now",1),
         ("Meeting at 5pm",0),
+        ("Urgent: update account now",1),
+        ("Your order delivered",0)
     ]
 
     texts = [d[0] for d in sms_data]
     labels = [d[1] for d in sms_data]
 
     vectorizer = TfidfVectorizer(stop_words="english")
-    X_sms = vectorizer.fit_transform(texts)
+    X = vectorizer.fit_transform(texts)
 
-    sms_model = MultinomialNB()
-    sms_model.fit(X_sms, labels)
+    model = MultinomialNB()
+    model.fit(X, labels)
 
-    return url_model, sms_model, vectorizer
+    return model, vectorizer
 
-url_model, sms_model, vectorizer = train_models(df)
+sms_model, vectorizer = train_sms_model()
 
 # ---------------- NETWORK ----------------
-def get_network_info(url):
+def get_network(url):
     try:
         host = url.split("//")[-1].split("/")[0]
         ip = socket.gethostbyname(host)
@@ -77,19 +104,11 @@ def get_network_info(url):
         start = time.time()
         r = requests.get(url, timeout=3)
         rt = round((time.time()-start)*1000,2)
-        return {"ip": ip, "response": rt, "status": r.status_code}
+        return {"ip": ip, "response": rt}
     except:
-        return {"ip": ip, "response": -1, "status": 0}
+        return {"ip": ip, "response": -1}
 
-# ---------------- GEO ----------------
-def get_geo(ip):
-    try:
-        res = requests.get(f"http://ip-api.com/json/{ip}").json()
-        return res.get("country","Unknown")
-    except:
-        return "Unknown"
-
-# ---------------- DASHBOARD DATA ----------------
+# ---------------- SESSION ----------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -103,78 +122,87 @@ with tab1:
     url = st.text_input("Enter URL")
 
     if st.button("Analyze URL"):
-        if not url.startswith("http"):
-            url = "http://" + url
+        if not url:
+            st.warning("Enter URL first")
+        else:
+            if not url.startswith("http"):
+                url = "http://" + url
 
-        features = [len(url), sum(k in url for k in ["login","bank","verify","secure"])]
+            features = [
+                len(url),
+                url.count("."),
+                url.count("-"),
+                sum(k in url for k in ["login","bank","verify","secure","account"])
+            ]
 
-        pred = url_model.predict([features])[0]
-        prob = url_model.predict_proba([features])[0]
+            pred = url_model.predict([features])[0]
+            prob = url_model.predict_proba([features])[0]
 
-        label = "Phishing" if pred == 1 else "Safe"
-        confidence = round(max(prob)*100,2)
+            label = "🚨 Phishing" if pred == 1 else "✅ Safe"
+            confidence = round(max(prob)*100,2)
 
-        net = get_network_info(url)
-        geo = get_geo(net["ip"])
+            risk = min(100, int(confidence + features[3]*10))
 
-        risk = min(100, int(confidence + features[1]*10))
+            net = get_network(url)
 
-        # Save history
-        st.session_state.history.append({
-            "url": url,
-            "result": label,
-            "risk": risk
-        })
+            # Save history
+            st.session_state.history.append({
+                "url": url,
+                "result": label,
+                "risk": risk
+            })
 
-        st.subheader(f"🔍 {label}")
-        st.write("Confidence:", confidence)
-        st.write("Risk Score:", risk)
-        st.progress(risk/100)
+            st.subheader(label)
+            st.write("Confidence:", confidence)
+            st.write("Risk Score:", risk)
+            st.progress(risk/100)
 
-        st.write("IP:", net["ip"])
-        st.write("Response:", net["response"])
-        st.write("Location:", geo)
+            st.markdown("### 🌐 Network Info")
+            st.write("IP:", net["ip"])
+            st.write("Response Time:", net["response"])
 
 # =====================================================
 # 📱 SMS DETECTION
 # =====================================================
 with tab2:
-    sms = st.text_area("Enter SMS")
+    sms = st.text_area("Enter SMS / Message")
 
     if st.button("Analyze SMS"):
-        X = vectorizer.transform([sms])
-        pred = sms_model.predict(X)[0]
-        prob = sms_model.predict_proba(X)[0]
+        if not sms:
+            st.warning("Enter message first")
+        else:
+            X = vectorizer.transform([sms])
+            pred = sms_model.predict(X)[0]
+            prob = sms_model.predict_proba(X)[0]
 
-        label = "Phishing" if pred == 1 else "Safe"
-        confidence = round(max(prob)*100,2)
+            label = "🚨 Phishing" if pred == 1 else "✅ Safe"
+            confidence = round(max(prob)*100,2)
 
-        words = ["urgent","verify","bank","free","win","otp","click"]
-        found = [w for w in words if w in sms.lower()]
+            words = ["urgent","verify","bank","free","win","otp","click","account"]
+            found = [w for w in words if w in sms.lower()]
 
-        risk = min(100, int(confidence + len(found)*5))
+            risk = min(100, int(confidence + len(found)*5))
 
-        st.subheader(label)
-        st.write("Confidence:", confidence)
-        st.write("Risk:", risk)
-        st.progress(risk/100)
+            st.subheader(label)
+            st.write("Confidence:", confidence)
+            st.write("Risk Score:", risk)
+            st.progress(risk/100)
 
-        st.write("Suspicious Words:", found)
+            st.write("Suspicious Words:", found)
 
 # =====================================================
 # 📊 DASHBOARD
 # =====================================================
 with tab3:
-    st.subheader("📊 Monitoring Dashboard")
+    st.subheader("📊 Live Monitoring Dashboard")
 
     if st.session_state.history:
-        df_hist = pd.DataFrame(st.session_state.history)
+        hist = pd.DataFrame(st.session_state.history)
 
-        st.line_chart(df_hist["risk"])
+        st.line_chart(hist["risk"])
+        st.bar_chart(hist["result"].value_counts())
 
-        counts = df_hist["result"].value_counts()
-        st.bar_chart(counts)
-
-        st.write(df_hist.tail(5))
+        st.markdown("### Recent Activity")
+        st.write(hist.tail(10))
     else:
-        st.info("No data yet")
+        st.info("No scans yet")
