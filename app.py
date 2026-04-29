@@ -3,38 +3,25 @@ import pandas as pd
 import requests
 import socket
 import time
-import zipfile
-import os
-from io import BytesIO
-
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 # ---------------- CONFIG ----------------
-DATA_URL = "https://raw.githubusercontent.com/AbhishekShivangi/phishguard-ai/main/phishing_site_urls.csv" # 🔥 Replace this
-CSV_NAME = "phishing_site_urls.csv"
+DATA_URL = "https://raw.githubusercontent.com/AbhishekShivangi/phishguard-ai/main/phishing_site_urls.csv"
 
-# ---------------- PAGE ----------------
 st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
+
+# ---------------- TITLE ----------------
 st.title("🛡️ PhishGuard AI Pro")
-st.markdown("Real-Time Phishing Detection System")
+st.markdown("Real-Time Phishing Detection using Machine Learning")
 
 # ---------------- LOAD DATA ----------------
 @st.cache_data
 def load_dataset():
-    if not os.path.exists(CSV_NAME):
-        st.info("Downloading dataset...")
+    df = pd.read_csv(DATA_URL)
 
-        r = requests.get(DATA_URL)
-        z = zipfile.ZipFile(BytesIO(r.content))
-        z.extractall()
-
-        st.success("Dataset ready!")
-
-    df = pd.read_csv(CSV_NAME)
-
-    # Fix columns
+    # Fix columns if needed
     if len(df.columns) != 2:
         df = df.iloc[:, :2]
 
@@ -44,6 +31,8 @@ def load_dataset():
     return df
 
 df = load_dataset()
+
+st.success(f"Dataset Loaded: {len(df)} URLs")
 
 # ---------------- TRAIN URL MODEL ----------------
 @st.cache_resource
@@ -92,7 +81,7 @@ def train_sms_model():
 
 sms_model, vectorizer = train_sms_model()
 
-# ---------------- NETWORK ----------------
+# ---------------- NETWORK INFO ----------------
 def get_network(url):
     try:
         host = url.split("//")[-1].split("/")[0]
@@ -145,7 +134,6 @@ with tab1:
 
             net = get_network(url)
 
-            # Save history
             st.session_state.history.append({
                 "url": url,
                 "result": label,
