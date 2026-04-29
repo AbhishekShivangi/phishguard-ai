@@ -1,43 +1,56 @@
 import streamlit as st
+import pandas as pd
 import requests
 import socket
 import time
 import re
+import kagglehub
+from kagglehub import KaggleDatasetAdapter
+
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.ensemble import RandomForestClassifier
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
+st.title("🛡️ PhishGuard AI Pro (Real Dataset Version)")
 
-# ---------------- LOAD MODELS (NO FILES) ----------------
+# ---------------- LOAD DATASET ----------------
+@st.cache_data
+def load_dataset():
+    df = kagglehub.load_dataset(
+        KaggleDatasetAdapter.PANDAS,
+        "taruntiwarihp/phishing-site-urls",
+        ""
+    )
+    df = df.rename(columns={"url": "url", "label": "label"})
+    df["label"] = df["label"].map({"bad":1, "good":0})
+    return df
+
+df = load_dataset()
+
+st.success(f"Dataset Loaded: {len(df)} URLs")
+
+# ---------------- TRAIN MODELS ----------------
 @st.cache_resource
-def load_models():
-    # URL model
-    url_data = [
-        ("https://google.com",0),
-        ("https://github.com",0),
-        ("http://secure-login-bank.xyz",1),
-        ("http://verify-paypal-account.tk",1)
-    ]
-
+def train_models(df):
+    # URL MODEL
     def extract(url):
         return [len(url), sum(k in url for k in ["login","bank","verify","secure"])]
 
-    X = [extract(u) for u,_ in url_data]
-    y = [l for _,l in url_data]
+    X = [extract(u) for u in df["url"][:5000]]
+    y = df["label"][:5000]
 
-    url_model = RandomForestClassifier()
-    url_model.fit(X,y)
+    url_model = RandomForestClassifier(n_estimators=100)
+    url_model.fit(X, y)
 
-    # SMS model
+    # SMS MODEL
     sms_data = [
         ("Win money now click here",1),
         ("Your OTP is 1234",0),
         ("Verify your bank account immediately",1),
         ("Free prize claim now",1),
         ("Meeting at 5pm",0),
-        ("Your parcel delivered",0)
     ]
 
     texts = [d[0] for d in sms_data]
@@ -51,12 +64,9 @@ def load_models():
 
     return url_model, sms_model, vectorizer
 
-url_model, sms_model, vectorizer = load_models()
+url_model, sms_model, vectorizer = train_models(df)
 
-# ---------------- FUNCTIONS ----------------
-def extract_features(url):
-    return [len(url), sum(k in url for k in ["login","bank","verify","secure"])]
-
+# ---------------- NETWORK ----------------
 def get_network_info(url):
     try:
         host = url.split("//")[-1].split("/")[0]
@@ -72,6 +82,7 @@ def get_network_info(url):
     except:
         return {"ip": ip, "response": -1, "status": 0}
 
+# ---------------- GEO ----------------
 def get_geo(ip):
     try:
         res = requests.get(f"http://ip-api.com/json/{ip}").json()
@@ -79,11 +90,12 @@ def get_geo(ip):
     except:
         return "Unknown"
 
-# ---------------- UI ----------------
-st.title("🛡️ PhishGuard AI Pro")
-st.markdown("AI-powered phishing detection for URLs and SMS")
+# ---------------- DASHBOARD DATA ----------------
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-tab1, tab2 = st.tabs(["🌐 URL Detection", "📱 SMS Detection"])
+# ---------------- TABS ----------------
+tab1, tab2, tab3 = st.tabs(["🌐 URL Detection", "📱 SMS Detection", "📊 Dashboard"])
 
 # =====================================================
 # 🌐 URL DETECTION
@@ -92,84 +104,78 @@ with tab1:
     url = st.text_input("Enter URL")
 
     if st.button("Analyze URL"):
-        if not url:
-            st.warning("Enter URL first")
-        else:
-            if not url.startswith("http"):
-                url = "http://" + url
+        if not url.startswith("http"):
+            url = "http://" + url
 
-            features = extract_features(url)
-            pred = url_model.predict([features])[0]
-            prob = url_model.predict_proba([features])[0]
+        features = [len(url), sum(k in url for k in ["login","bank","verify","secure"])]
 
-            label = "🚨 Phishing" if pred == 1 else "✅ Safe"
-            confidence = round(max(prob)*100,2)
+        pred = url_model.predict([features])[0]
+        prob = url_model.predict_proba([features])[0]
 
-            net = get_network_info(url)
-            geo = get_geo(net["ip"])
+        label = "Phishing" if pred == 1 else "Safe"
+        confidence = round(max(prob)*100,2)
 
-            risk = min(100, int(confidence + features[1]*10))
+        net = get_network_info(url)
+        geo = get_geo(net["ip"])
 
-            st.subheader(label)
-            st.write("Confidence:", confidence)
-            st.write("Risk Score:", risk)
-            st.progress(risk/100)
+        risk = min(100, int(confidence + features[1]*10))
 
-            st.markdown("### 🌐 Network Info")
-            st.write("IP:", net["ip"])
-            st.write("Response Time:", net["response"])
-            st.write("Location:", geo)
+        # Save history
+        st.session_state.history.append({
+            "url": url,
+            "result": label,
+            "risk": risk
+        })
 
-            st.markdown("### ⚠️ Feature Analysis")
-            st.write({
-                "URL Length": features[0],
-                "Suspicious Keywords": features[1]
-            })
+        st.subheader(f"🔍 {label}")
+        st.write("Confidence:", confidence)
+        st.write("Risk Score:", risk)
+        st.progress(risk/100)
+
+        st.write("IP:", net["ip"])
+        st.write("Response:", net["response"])
+        st.write("Location:", geo)
 
 # =====================================================
 # 📱 SMS DETECTION
 # =====================================================
 with tab2:
-    sms = st.text_area("Enter SMS / Message")
+    sms = st.text_area("Enter SMS")
 
     if st.button("Analyze SMS"):
-        if not sms:
-            st.warning("Enter message first")
-        else:
-            X = vectorizer.transform([sms])
-            pred = sms_model.predict(X)[0]
-            prob = sms_model.predict_proba(X)[0]
+        X = vectorizer.transform([sms])
+        pred = sms_model.predict(X)[0]
+        prob = sms_model.predict_proba(X)[0]
 
-            label = "🚨 Phishing" if pred == 1 else "✅ Safe"
-            confidence = round(max(prob)*100,2)
+        label = "Phishing" if pred == 1 else "Safe"
+        confidence = round(max(prob)*100,2)
 
-            suspicious_words = ["urgent","verify","bank","free","win","otp","click"]
-            found = [w for w in suspicious_words if w in sms.lower()]
+        words = ["urgent","verify","bank","free","win","otp","click"]
+        found = [w for w in words if w in sms.lower()]
 
-            risk = min(100, int(confidence + len(found)*5))
+        risk = min(100, int(confidence + len(found)*5))
 
-            st.subheader(label)
-            st.write("Confidence:", confidence)
-            st.write("Risk Score:", risk)
-            st.progress(risk/100)
+        st.subheader(label)
+        st.write("Confidence:", confidence)
+        st.write("Risk:", risk)
+        st.progress(risk/100)
 
-            st.markdown("### ⚠️ Suspicious Words")
-            st.write(found if found else "None")
+        st.write("Suspicious Words:", found)
 
-            # Highlight words
-            highlighted = sms
-            for w in found:
-                highlighted = highlighted.replace(w, f"🔴{w}🔴")
+# =====================================================
+# 📊 DASHBOARD
+# =====================================================
+with tab3:
+    st.subheader("📊 Monitoring Dashboard")
 
-            st.markdown(highlighted)
+    if st.session_state.history:
+        df_hist = pd.DataFrame(st.session_state.history)
 
-            # Attack simulation
-            if st.toggle("⚠️ Simulate Phishing Attack"):
-                st.error("User clicked malicious link")
-                st.warning("Fake login page opened")
-                st.error("Credentials stolen!")
-                st.success("PhishGuard blocked attack!")
+        st.line_chart(df_hist["risk"])
 
-# ---------------- FOOTER ----------------
-st.markdown("---")
-st.markdown("PhishGuard AI Pro • Hackathon Project")
+        counts = df_hist["result"].value_counts()
+        st.bar_chart(counts)
+
+        st.write(df_hist.tail(5))
+    else:
+        st.info("No data yet")
