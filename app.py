@@ -6,36 +6,45 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
-# ---------------- CONFIG ----------------
-DATA_URL = "https://drive.google.com/uc?export=download&id=1ScnOTw3rCiZ6E9IRos-SizQhIMA4PQu3"
-
+# ---------------- PAGE ----------------
 st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
-
-# ---------------- TITLE ----------------
 st.title("🛡️ PhishGuard AI Pro")
-st.markdown("Real-Time Phishing Detection System")
+st.markdown("Real-Time Phishing Detection System (Pro Version)")
 
-# ---------------- LOAD DATA ----------------
+# ---------------- DATA LOADER ----------------
 @st.cache_data
 def load_dataset():
     try:
-        df = pd.read_csv(DATA_URL)
-    except:
-        st.error("❌ Failed to load dataset. Check Google Drive link or sharing permissions.")
-        st.stop()
+        import kagglehub
+        from kagglehub import KaggleDatasetAdapter
 
-    # Ensure only first 2 columns
-    df = df.iloc[:, :2]
-    df.columns = ["url", "label"]
+        df = kagglehub.load_dataset(
+            KaggleDatasetAdapter.PANDAS,
+            "taruntiwarihp/phishing-site-urls",
+            "phishing_site_urls.csv"
+        )
 
-    # Convert labels
-    df["label"] = df["label"].map({"bad":1, "good":0})
+        df = df.iloc[:, :2]
+        df.columns = ["url", "label"]
+        df["label"] = df["label"].map({"bad":1, "good":0})
 
-    return df
+        st.success("✅ Loaded real Kaggle dataset")
+        return df
+
+    except Exception:
+        st.warning("⚠️ Kaggle load failed → using fallback dataset")
+
+        data = [
+            ("https://google.com",0),
+            ("https://github.com",0),
+            ("http://secure-login-bank.xyz",1),
+            ("http://verify-paypal-account.tk",1),
+            ("https://amazon.in",0),
+            ("http://free-money-now.click",1),
+        ]
+        return pd.DataFrame(data, columns=["url","label"])
 
 df = load_dataset()
-
-st.success(f"Dataset Loaded: {len(df)} URLs")
 
 # ---------------- TRAIN URL MODEL ----------------
 @st.cache_resource
@@ -53,12 +62,11 @@ def train_url_model(df):
 
     model = RandomForestClassifier(n_estimators=100)
     model.fit(X, y)
-
     return model
 
 url_model = train_url_model(df)
 
-# ---------------- TRAIN SMS MODEL ----------------
+# ---------------- SMS MODEL ----------------
 @st.cache_resource
 def train_sms_model():
     sms_data = [
@@ -84,7 +92,7 @@ def train_sms_model():
 
 sms_model, vectorizer = train_sms_model()
 
-# ---------------- NETWORK INFO ----------------
+# ---------------- NETWORK ----------------
 def get_network(url):
     try:
         host = url.split("//")[-1].split("/")[0]
@@ -109,7 +117,7 @@ if "history" not in st.session_state:
 tab1, tab2, tab3 = st.tabs(["🌐 URL Detection", "📱 SMS Detection", "📊 Dashboard"])
 
 # =====================================================
-# 🌐 URL DETECTION
+# URL DETECTION
 # =====================================================
 with tab1:
     url = st.text_input("Enter URL")
@@ -133,12 +141,10 @@ with tab1:
 
             label = "🚨 Phishing" if pred == 1 else "✅ Safe"
             confidence = round(max(prob)*100,2)
-
             risk = min(100, int(confidence + features[3]*10))
 
             net = get_network(url)
 
-            # Save history
             st.session_state.history.append({
                 "url": url,
                 "result": label,
@@ -150,12 +156,11 @@ with tab1:
             st.write("Risk Score:", risk)
             st.progress(risk/100)
 
-            st.markdown("### 🌐 Network Info")
             st.write("IP:", net["ip"])
             st.write("Response Time:", net["response"])
 
 # =====================================================
-# 📱 SMS DETECTION
+# SMS DETECTION
 # =====================================================
 with tab2:
     sms = st.text_area("Enter SMS / Message")
@@ -184,10 +189,10 @@ with tab2:
             st.write("Suspicious Words:", found)
 
 # =====================================================
-# 📊 DASHBOARD
+# DASHBOARD
 # =====================================================
 with tab3:
-    st.subheader("📊 Live Monitoring Dashboard")
+    st.subheader("📊 Monitoring Dashboard")
 
     if st.session_state.history:
         hist = pd.DataFrame(st.session_state.history)
@@ -195,7 +200,6 @@ with tab3:
         st.line_chart(hist["risk"])
         st.bar_chart(hist["result"].value_counts())
 
-        st.markdown("### Recent Activity")
         st.write(hist.tail(10))
     else:
         st.info("No scans yet")
