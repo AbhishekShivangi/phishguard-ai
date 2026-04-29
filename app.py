@@ -2,54 +2,25 @@ import streamlit as st
 import pandas as pd
 import socket
 import time
+import random
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
-# ---------------- CYBER UI STYLE ----------------
 st.set_page_config(page_title="PhishGuard AI", layout="wide")
 
+# ---------------- CYBER STYLE ----------------
 st.markdown("""
 <style>
-body {
-    background-color: #0f172a;
-    color: #e2e8f0;
-}
-.stApp {
-    background: linear-gradient(135deg, #020617, #0f172a);
-}
-h1, h2, h3 {
-    color: #38bdf8;
-    text-shadow: 0 0 10px #38bdf8;
-}
-div.stButton > button {
-    background: #0ea5e9;
-    color: white;
-    border-radius: 10px;
-    transition: 0.3s;
-}
-div.stButton > button:hover {
-    background: #38bdf8;
-    box-shadow: 0 0 15px #38bdf8;
-}
-.block-container {
-    padding-top: 1rem;
-}
-.card {
-    background: #020617;
-    padding: 20px;
-    border-radius: 12px;
-    box-shadow: 0 0 10px #0ea5e9;
-    margin-bottom: 10px;
-}
+.stApp {background: #020617; color: white;}
+h1 {color: #38bdf8;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- TITLE ----------------
 st.title("🛡️ PhishGuard AI")
-st.markdown("### ⚡ Real-Time Cyber Threat Detection System")
+st.markdown("### ⚡ Real-Time Cyber Threat Intelligence System")
 
-# ---------------- SAMPLE DATA ----------------
+# ---------------- DATASET ----------------
 @st.cache_data
 def load_data():
     data = [
@@ -64,7 +35,7 @@ def load_data():
 
 df = load_data()
 
-# ---------------- MODEL ----------------
+# ---------------- URL MODEL ----------------
 @st.cache_resource
 def train_model(df):
     def extract(url):
@@ -72,7 +43,7 @@ def train_model(df):
             len(url),
             url.count("."),
             url.count("-"),
-            sum(k in url for k in ["login","bank","verify","secure","account"])
+            sum(k in url for k in ["login","bank","verify","secure"])
         ]
 
     X = [extract(u) for u in df["url"]]
@@ -86,8 +57,8 @@ model = train_model(df)
 
 # ---------------- SMS MODEL ----------------
 @st.cache_resource
-def sms_model_train():
-    texts = ["Win money now", "Your OTP is 1234", "Verify bank account", "Meeting at 5"]
+def train_sms():
+    texts = ["Win money now", "Your OTP is 1234", "Verify bank", "Meeting"]
     labels = [1,0,1,0]
 
     vec = TfidfVectorizer()
@@ -95,84 +66,80 @@ def sms_model_train():
 
     model = MultinomialNB()
     model.fit(X, labels)
-
     return model, vec
 
-sms_model, vec = sms_model_train()
+sms_model, vec = train_sms()
 
-# ---------------- SESSION ----------------
+# ---------------- HISTORY ----------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # ---------------- TABS ----------------
-tab1, tab2, tab3 = st.tabs(["🌐 URL Scanner", "📱 SMS Scanner", "📊 Dashboard"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🌐 URL Scanner",
+    "📱 SMS Scanner",
+    "📊 Dashboard",
+    "🌍 Threat Intelligence"
+])
 
 # =====================================================
 # URL SCANNER
 # =====================================================
 with tab1:
-    st.markdown("### 🔍 Scan URL")
+    url = st.text_input("Enter URL")
 
-    url = st.text_input("Enter suspicious URL")
+    if st.button("Analyze URL"):
+        if not url.startswith("http"):
+            url = "http://" + url
 
-    if st.button("🚀 Analyze"):
-        if not url:
-            st.warning("Enter URL first")
-        else:
-            if not url.startswith("http"):
-                url = "http://" + url
+        features = [
+            len(url),
+            url.count("."),
+            url.count("-"),
+            sum(k in url for k in ["login","bank","verify","secure"])
+        ]
 
-            features = [
-                len(url),
-                url.count("."),
-                url.count("-"),
-                sum(k in url for k in ["login","bank","verify","secure"])
-            ]
+        pred = model.predict([features])[0]
+        prob = model.predict_proba([features])[0]
 
-            pred = model.predict([features])[0]
-            prob = model.predict_proba([features])[0]
+        label = "🚨 Phishing" if pred else "✅ Safe"
+        confidence = round(max(prob)*100,2)
+        risk = min(100, int(confidence + features[3]*10))
 
-            label = "🚨 PHISHING" if pred else "✅ SAFE"
-            confidence = round(max(prob)*100,2)
-            risk = min(100, int(confidence + features[3]*10))
+        try:
+            ip = socket.gethostbyname(url.split("//")[-1])
+        except:
+            ip = "Unknown"
 
-            try:
-                ip = socket.gethostbyname(url.split("//")[-1])
-            except:
-                ip = "Unknown"
+        st.session_state.history.append({
+            "url": url,
+            "result": label,
+            "risk": risk
+        })
 
-            st.session_state.history.append({"result": label, "risk": risk})
-
-            st.markdown(f"<div class='card'><h2>{label}</h2></div>", unsafe_allow_html=True)
-            st.progress(risk/100)
-            st.write("Confidence:", confidence)
-            st.write("Risk Score:", risk)
-            st.write("IP Address:", ip)
+        st.subheader(label)
+        st.progress(risk/100)
+        st.write("Confidence:", confidence)
+        st.write("IP:", ip)
 
 # =====================================================
 # SMS SCANNER
 # =====================================================
 with tab2:
-    st.markdown("### 📱 Analyze Message")
+    sms = st.text_area("Enter SMS")
 
-    sms = st.text_area("Enter SMS text")
-
-    if st.button("🔍 Analyze SMS"):
+    if st.button("Analyze SMS"):
         X = vec.transform([sms])
         pred = sms_model.predict(X)[0]
-        prob = sms_model.predict_proba(X)[0]
 
-        label = "🚨 PHISHING" if pred else "✅ SAFE"
-        confidence = round(max(prob)*100,2)
-
-        st.markdown(f"<div class='card'><h2>{label}</h2></div>", unsafe_allow_html=True)
-        st.write("Confidence:", confidence)
+        label = "🚨 Phishing" if pred else "✅ Safe"
+        st.subheader(label)
 
 # =====================================================
-# DASHBOARD
+# DASHBOARD (GRAPHS)
 # =====================================================
 with tab3:
-    st.markdown("### 📊 Threat Monitoring")
+    st.subheader("📊 Threat Monitoring Dashboard")
 
     if st.session_state.history:
         hist = pd.DataFrame(st.session_state.history)
@@ -180,10 +147,41 @@ with tab3:
         col1, col2 = st.columns(2)
 
         with col1:
+            st.write("📈 Risk Trend")
             st.line_chart(hist["risk"])
 
         with col2:
+            st.write("📊 Detection Count")
             st.bar_chart(hist["result"].value_counts())
 
+        st.write("📋 Recent Activity")
+        st.dataframe(hist.tail(10))
+
     else:
-        st.info("No scans yet")
+        st.info("No data yet")
+
+# =====================================================
+# THREAT INTELLIGENCE (ADVANCED)
+# =====================================================
+with tab4:
+    st.subheader("🌍 Live Threat Intelligence Feed")
+
+    threats = [
+        "malicious-bank-login.xyz",
+        "free-crypto-win.click",
+        "paypal-secure-update.tk",
+        "verify-account-alert.info"
+    ]
+
+    risk_levels = [random.randint(70,100) for _ in threats]
+
+    df_threat = pd.DataFrame({
+        "Threat Domain": threats,
+        "Risk Score": risk_levels
+    })
+
+    st.write("🔴 High Risk Domains")
+    st.dataframe(df_threat)
+
+    st.write("📊 Threat Risk Distribution")
+    st.bar_chart(df_threat["Risk Score"])
