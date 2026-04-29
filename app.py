@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import requests
 import socket
 import time
 from sklearn.ensemble import RandomForestClassifier
@@ -8,24 +7,28 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 # ---------------- CONFIG ----------------
-DATA_URL = "https://raw.githubusercontent.com/AbhishekShivangi/phishguard-ai/main/phishing_site_urls.csv"
+DATA_URL = "https://drive.google.com/uc?export=download&id=1ScnOTw3rCiZ6E9IRos-SizQhIMA4PQu3"
 
 st.set_page_config(page_title="PhishGuard AI Pro", layout="wide")
 
 # ---------------- TITLE ----------------
 st.title("🛡️ PhishGuard AI Pro")
-st.markdown("Real-Time Phishing Detection using Machine Learning")
+st.markdown("Real-Time Phishing Detection System")
 
 # ---------------- LOAD DATA ----------------
 @st.cache_data
 def load_dataset():
-    df = pd.read_csv(DATA_URL)
+    try:
+        df = pd.read_csv(DATA_URL)
+    except:
+        st.error("❌ Failed to load dataset. Check Google Drive link or sharing permissions.")
+        st.stop()
 
-    # Fix columns if needed
-    if len(df.columns) != 2:
-        df = df.iloc[:, :2]
-
+    # Ensure only first 2 columns
+    df = df.iloc[:, :2]
     df.columns = ["url", "label"]
+
+    # Convert labels
     df["label"] = df["label"].map({"bad":1, "good":0})
 
     return df
@@ -55,7 +58,7 @@ def train_url_model(df):
 
 url_model = train_url_model(df)
 
-# ---------------- SMS MODEL ----------------
+# ---------------- TRAIN SMS MODEL ----------------
 @st.cache_resource
 def train_sms_model():
     sms_data = [
@@ -91,6 +94,7 @@ def get_network(url):
 
     try:
         start = time.time()
+        import requests
         r = requests.get(url, timeout=3)
         rt = round((time.time()-start)*1000,2)
         return {"ip": ip, "response": rt}
@@ -134,6 +138,7 @@ with tab1:
 
             net = get_network(url)
 
+            # Save history
             st.session_state.history.append({
                 "url": url,
                 "result": label,
