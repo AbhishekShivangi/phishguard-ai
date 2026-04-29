@@ -2,14 +2,15 @@ import streamlit as st
 import pandas as pd
 import socket
 import time
-import random
+import re
+import tldextract
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
+# ---------------- UI ----------------
 st.set_page_config(page_title="PhishGuard AI", layout="wide")
 
-# ---------------- CYBER STYLE ----------------
 st.markdown("""
 <style>
 .stApp {background: #020617; color: white;}
@@ -18,15 +19,28 @@ h1 {color: #38bdf8;}
 """, unsafe_allow_html=True)
 
 st.title("🛡️ PhishGuard AI")
-st.markdown("### ⚡ Real-Time Cyber Threat Intelligence System")
+st.markdown("### ⚡ Smart Phishing Detection (Reduced False Positives)")
 
-# ---------------- DATASET ----------------
+# ---------------- TRUSTED DOMAINS ----------------
+trusted_domains = [
+    "google.com","github.com","amazon.in","facebook.com",
+    "microsoft.com","apple.com","youtube.com","linkedin.com"
+]
+
+def get_domain(url):
+    ext = tldextract.extract(url)
+    return ext.domain + "." + ext.suffix
+
+def is_trusted(url):
+    return get_domain(url) in trusted_domains
+
+# ---------------- DATA ----------------
 @st.cache_data
 def load_data():
     data = [
         ("https://google.com",0),
-        ("http://secure-login-bank.xyz",1),
         ("https://github.com",0),
+        ("http://secure-login-bank.xyz",1),
         ("http://verify-paypal-account.tk",1),
         ("https://amazon.in",0),
         ("http://free-money.click",1)
@@ -35,21 +49,26 @@ def load_data():
 
 df = load_data()
 
-# ---------------- URL MODEL ----------------
+# ---------------- FEATURE EXTRACTION ----------------
+def extract_features(url):
+    return [
+        len(url),
+        url.count('.'),
+        url.count('-'),
+        int("https" in url),
+        int("@" in url),
+        int("login" in url.lower()),
+        int("verify" in url.lower()),
+        len(re.findall(r'\d+', url))
+    ]
+
+# ---------------- MODEL ----------------
 @st.cache_resource
 def train_model(df):
-    def extract(url):
-        return [
-            len(url),
-            url.count("."),
-            url.count("-"),
-            sum(k in url for k in ["login","bank","verify","secure"])
-        ]
-
-    X = [extract(u) for u in df["url"]]
+    X = [extract_features(u) for u in df["url"]]
     y = df["label"]
 
-    model = RandomForestClassifier()
+    model = RandomForestClassifier(n_estimators=100)
     model.fit(X, y)
     return model
 
@@ -58,7 +77,7 @@ model = train_model(df)
 # ---------------- SMS MODEL ----------------
 @st.cache_resource
 def train_sms():
-    texts = ["Win money now", "Your OTP is 1234", "Verify bank", "Meeting"]
+    texts = ["Win money now", "Your OTP is 1234", "Verify bank account", "Meeting"]
     labels = [1,0,1,0]
 
     vec = TfidfVectorizer()
@@ -70,44 +89,55 @@ def train_sms():
 
 sms_model, vec = train_sms()
 
-# ---------------- HISTORY ----------------
+# ---------------- SESSION ----------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # ---------------- TABS ----------------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🌐 URL Scanner",
-    "📱 SMS Scanner",
-    "📊 Dashboard",
-    "🌍 Threat Intelligence"
-])
+tab1, tab2, tab3 = st.tabs(["🌐 URL Scanner","📱 SMS Scanner","📊 Dashboard"])
 
 # =====================================================
 # URL SCANNER
 # =====================================================
 with tab1:
+    st.subheader("🔍 URL Analysis")
+
     url = st.text_input("Enter URL")
 
     if st.button("Analyze URL"):
         if not url.startswith("http"):
             url = "http://" + url
 
-        features = [
-            len(url),
-            url.count("."),
-            url.count("-"),
-            sum(k in url for k in ["login","bank","verify","secure"])
-        ]
+        domain = get_domain(url)
 
-        pred = model.predict([features])[0]
-        prob = model.predict_proba([features])[0]
+        # TRUST CHECK
+        if is_trusted(url):
+            label = "✅ Safe (Trusted Domain)"
+            confidence = 98
+            risk = 5
+            reason = ["Trusted domain verified"]
 
-        label = "🚨 Phishing" if pred else "✅ Safe"
-        confidence = round(max(prob)*100,2)
-        risk = min(100, int(confidence + features[3]*10))
+        else:
+            features = extract_features(url)
+
+            pred = model.predict([features])[0]
+            prob = model.predict_proba([features])[0]
+
+            label = "🚨 Phishing" if pred else "⚠️ Suspicious"
+            confidence = round(max(prob)*100,2)
+
+            keyword_score = features[5] + features[6]
+            risk = min(100, int(confidence + keyword_score * 5))
+
+            # EXPLANATION
+            reason = []
+            if features[5]: reason.append("Login keyword found")
+            if features[6]: reason.append("Verify keyword found")
+            if features[4]: reason.append("@ symbol detected")
+            if features[2] > 2: reason.append("Too many hyphens")
 
         try:
-            ip = socket.gethostbyname(url.split("//")[-1])
+            ip = socket.gethostbyname(domain)
         except:
             ip = "Unknown"
 
@@ -119,13 +149,21 @@ with tab1:
 
         st.subheader(label)
         st.progress(risk/100)
+
         st.write("Confidence:", confidence)
+        st.write("Risk Score:", risk)
+        st.write("Domain:", domain)
         st.write("IP:", ip)
+
+        st.markdown("### 🔍 Why this result?")
+        st.write(reason if reason else "No suspicious patterns")
 
 # =====================================================
 # SMS SCANNER
 # =====================================================
 with tab2:
+    st.subheader("📱 SMS Analysis")
+
     sms = st.text_area("Enter SMS")
 
     if st.button("Analyze SMS"):
@@ -136,10 +174,10 @@ with tab2:
         st.subheader(label)
 
 # =====================================================
-# DASHBOARD (GRAPHS)
+# DASHBOARD
 # =====================================================
 with tab3:
-    st.subheader("📊 Threat Monitoring Dashboard")
+    st.subheader("📊 Threat Dashboard")
 
     if st.session_state.history:
         hist = pd.DataFrame(st.session_state.history)
@@ -154,34 +192,8 @@ with tab3:
             st.write("📊 Detection Count")
             st.bar_chart(hist["result"].value_counts())
 
-        st.write("📋 Recent Activity")
+        st.write("📋 History")
         st.dataframe(hist.tail(10))
 
     else:
-        st.info("No data yet")
-
-# =====================================================
-# THREAT INTELLIGENCE (ADVANCED)
-# =====================================================
-with tab4:
-    st.subheader("🌍 Live Threat Intelligence Feed")
-
-    threats = [
-        "malicious-bank-login.xyz",
-        "free-crypto-win.click",
-        "paypal-secure-update.tk",
-        "verify-account-alert.info"
-    ]
-
-    risk_levels = [random.randint(70,100) for _ in threats]
-
-    df_threat = pd.DataFrame({
-        "Threat Domain": threats,
-        "Risk Score": risk_levels
-    })
-
-    st.write("🔴 High Risk Domains")
-    st.dataframe(df_threat)
-
-    st.write("📊 Threat Risk Distribution")
-    st.bar_chart(df_threat["Risk Score"])
+        st.info("No scans yet")
