@@ -12,7 +12,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 
 # ---------------- CONFIG ----------------
-DATA_URL = "archive.zip"  # 🔥 Replace this
+DATA_URL = "https://github.com/AbhishekShivangi/phishguard-ai/blob/main/archive.zip"  # 🔥 Replace this
 CSV_NAME = "phishing_site_urls.csv"
 
 # ---------------- PAGE ----------------
